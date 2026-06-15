@@ -1,0 +1,338 @@
+---
+title: "Industrial Project V1"
+author: "Musa Tariq"
+date: "2026-03-05"
+output: html_document
+---
+
+
+EXPLORATORY DATA ANALYSIS
+
+1. Installing/Loading Data
+```{r setup, include=FALSE}
+install.packages("spatstat.data")
+install.packages("spatstat.geom")
+install.packages("spatstat.model")
+```
+
+
+```{r}
+library(here)
+library(spatstat.model)
+library(tidyverse)
+library(spatstat.data)
+library(spatstat.geom)
+data("murchison")
+```
+
+
+2. Initial Inspection
+```{r}
+
+str(murchison)
+dim(murchison)
+summary(murchison)
+head(murchison)
+
+```
+3. Basic analysis
+
+```{r}
+summary(murchison$gold)
+
+summary(murchison$greenstone)
+
+
+```
+
+
+```{r}
+
+class(murchison$gold)
+class(murchison$faults)
+class(murchison$greenstone)
+```
+
+6. Spatial EDA (VERY IMPORTANT FOR MURCHISON DATA)
+```{r}
+library(sp)
+library(ggplot2)
+```
+
+
+```{r}
+plot(murchison$greenstone, col = "lightgreen", main = "Murchison Region")
+
+plot(murchison$faults, add = TRUE)
+
+plot(murchison$gold, add = TRUE, pch = 20, col = "red")
+
+```
+```{r}
+plot(murchison$greenstone, col = "lightgreen", main = "Murchison Greenstone")
+plot(murchison$faults, main = "Murchison Fault Lines")
+plot(murchison$gold, main = "Murchison Gold")
+```
+
+
+
+```{r}
+
+# Perform discrete (or pixelated) logistic regression of point patterns
+mur <- murchison
+mur$dfault <- distfun(mur$faults)
+slrm(gold ~ dfault, data=mur)
+slrm(gold ~ dfault + greenstone, data=mur)
+slrm(gold ~ dfault, data=mur, splitby="greenstone")
+
+
+```
+
+
+
+
+
+```{r}
+#Differing Pixel Sizes
+mur <- murchison
+mur$dfault <- distfun(mur$faults)
+
+fit_slrm_10  <- slrm(gold ~ dfault + greenstone, data = mur, eps = 10000)
+fit_slrm_5   <- slrm(gold ~ dfault + greenstone, data = mur, eps = 5000)
+fit_slrm_2.5 <- slrm(gold ~ dfault + greenstone, data = mur, eps = 2500)
+fit_slrm_1   <- slrm(gold ~ dfault + greenstone, data = mur, eps = 1000)
+
+coef(fit_slrm_10)
+coef(fit_slrm_5)
+coef(fit_slrm_2.5)
+coef(fit_slrm_1)
+
+```
+
+
+```{r}
+# slrm doesn't take offsets directly, so use the offset argument via a workaround
+# The offset is log(pixel area) = log(eps^2)
+# One approach: fit ppm() which handles this natively (see step 3)
+```
+
+```{r}
+library(spatstat.model)
+# PPM Gold Standard
+dfault_im     <- as.im(mur$dfault, W = mur$gold$window)
+greenstone_im <- as.im(mur$greenstone, W = mur$gold$window, value = TRUE, na.replace = FALSE)
+
+fit_ppm <- ppm(mur$gold ~ dfault + greenstone,
+               covariates = list(dfault     = dfault_im,
+                                 greenstone = greenstone_im))
+coef(fit_ppm)
+
+lambda_ppm <- predict(fit_ppm, type = "intensity")
+plot(lambda_ppm, main = "Fitted Gold Deposit Intensity — PPM (Berman-Turner)", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+```
+
+```{r}
+# Here we have the plots compared to one another
+# Build results table from fitted models directly
+results_df <- data.frame(
+  eps         = c(10, 5, 2.5, 1, 0),
+  intercept   = c(coef(fit_slrm_10)[1], coef(fit_slrm_5)[1], coef(fit_slrm_2.5)[1], coef(fit_slrm_1)[1], coef(fit_ppm)[1]),
+  beta_dfault = c(coef(fit_slrm_10)[2], coef(fit_slrm_5)[2], coef(fit_slrm_2.5)[2], coef(fit_slrm_1)[2], coef(fit_ppm)[2]),
+  beta_green  = c(coef(fit_slrm_10)[3], coef(fit_slrm_5)[3], coef(fit_slrm_2.5)[3], coef(fit_slrm_1)[3], coef(fit_ppm)[3])
+)
+
+# Plot - Intercept
+ggplot(results_df, aes(x = eps, y = intercept)) +
+  geom_line() + geom_point() +
+  geom_hline(yintercept = coef(fit_ppm)[1], linetype = "dashed", col = "red") +
+  labs(title = "Intercept (α) across pixel sizes", x = "Pixel size (km)", y = "α") +
+  scale_x_reverse()
+
+# Plot - Beta dfault
+ggplot(results_df, aes(x = eps, y = beta_dfault)) +
+  geom_line() + geom_point() +
+  geom_hline(yintercept = coef(fit_ppm)[2], linetype = "dashed", col = "red") +
+  labs(title = "β (distance to fault) across pixel sizes", x = "Pixel size (km)", y = "β") +
+  scale_x_reverse()
+
+# Plot - Beta greenstone
+ggplot(results_df, aes(x = eps, y = beta_green)) +
+  geom_line() + geom_point() +
+  geom_hline(yintercept = coef(fit_ppm)[3], linetype = "dashed", col = "red") +
+  labs(title = "γ (greenstone) across pixel sizes", x = "Pixel size (km)", y = "γ") +
+  scale_x_reverse()
+
+```
+
+
+
+```{r}
+#THIS IS THE LAMBDA STUFF, FITTING THE MODELS TO SEE THEIR INTENSITY CHARTS
+
+# Intensity surface for each pixel size
+lambda_10  <- predict(fit_slrm_10)
+lambda_5   <- predict(fit_slrm_5)
+lambda_2.5 <- predict(fit_slrm_2.5)
+lambda_1   <- predict(fit_slrm_1)
+
+# Plot each one
+plot(lambda_10,  main = "Fitted Intensity — SLRM 10km", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+
+plot(lambda_5,   main = "Fitted Intensity — SLRM 5km", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+
+plot(lambda_2.5, main = "Fitted Intensity — SLRM 2.5km", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+
+plot(lambda_1,   main = "Fitted Intensity — SLRM 1km", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+
+plot(lambda_ppm, main = "Fitted Gold Deposit Intensity — PPM (Berman-Turner)", col = heat.colors(256))
+plot(mur$gold, add = TRUE, pch = 20, cex = 0.5, col = "blue")
+
+
+```
+
+
+
+```{r}
+# In this one I'll attempt to split it into 100 segments going from 0 to 3000, as we've seen that ~2.5km is near ppm (ppp model) standards
+eps_seq <- seq(1000, 3000, length = 100)
+
+results_list <- list()
+
+for (eps in eps_seq) {
+  fit <- slrm(gold ~ dfault + greenstone, data = mur, eps = eps)
+  results_list[[as.character(eps)]] <- coef(fit)
+}
+
+# Build results table
+results_df <- do.call(rbind, lapply(names(results_list), function(eps) {
+  data.frame(
+    eps         = as.numeric(eps) / 1000,  # convert back to km for display
+    intercept   = results_list[[eps]][1],
+    beta_dfault = results_list[[eps]][2],
+    beta_green  = results_list[[eps]][3]
+  )
+}))
+
+print(results_df)
+```
+
+```{r}
+# Plotting the data but for the 100 models between 1 and 3km
+# Plot 1 - Intercept
+ggplot(results_df, aes(x = eps, y = intercept)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[1], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "Intercept (α) across pixel sizes", x = "Pixel size (km)", y = "α")
+
+# Plot 2 - Beta dfault
+ggplot(results_df, aes(x = eps, y = beta_dfault)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[2], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "β (distance to fault) across pixel sizes", x = "Pixel size (km)", y = "β")
+
+# Plot 3 - Greenstone
+ggplot(results_df, aes(x = eps, y = beta_green)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[3], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "γ (greenstone) across pixel sizes", x = "Pixel size (km)", y = "γ")
+```
+
+```{r}
+library(pROC)
+
+get_roc <- function(fit) {
+  probs <- fit$Fit$FIT$fitted.values
+  obs   <- fit$Fit$FIT$y
+  roc(obs, probs)
+}
+
+roc_10  <- get_roc(fit_slrm_10)
+roc_5   <- get_roc(fit_slrm_5)
+roc_2.5 <- get_roc(fit_slrm_2.5)
+roc_1   <- get_roc(fit_slrm_1)
+
+# Plot
+plot(roc_10,  col = "blue",   main = "ROC Curves by Pixel Size")
+plot(roc_5,   col = "green",  add = TRUE)
+plot(roc_2.5, col = "orange", add = TRUE)
+plot(roc_1,   col = "red",    add = TRUE)
+legend("bottomright",
+       legend = c("10km", "5km", "2.5km", "1km"),
+       col    = c("blue", "green", "orange", "red"),
+       lwd    = 2)
+
+cat("AUC 10km: ",  auc(roc_10),  "\n")
+cat("AUC 5km: ",   auc(roc_5),   "\n")
+cat("AUC 2.5km: ", auc(roc_2.5), "\n")
+cat("AUC 1km: ",   auc(roc_1),   "\n")
+```
+```{r}
+
+eps_seq <- seq(1000, 3000, length = 100)  # in metres
+results_list <- list()
+roc_data_list <- list()
+
+for (pix in eps_seq) {
+  fit <- slrm(gold ~ dfault + greenstone, data = mur, eps = pix,
+              ruleAtPoints = "r")
+  results_list[[as.character(pix)]] <- coef(fit)
+  roc_data_list[[as.character(pix)]] <- list(
+    probs = fit$Fit$FIT$fitted.values,
+    obs   = fit$Fit$FIT$y
+  )
+  saveRDS(results_list, "results_checkpoint.rds")
+  saveRDS(roc_data_list, "roc_checkpoint.rds")
+}
+```
+
+
+```{r}
+# Build results table
+results_df <- do.call(rbind, lapply(names(results_list), function(pix) {
+  data.frame(
+    eps         = as.numeric(pix) / 1000,  # convert back to km
+    intercept   = results_list[[pix]][1],
+    beta_dfault = results_list[[pix]][2],
+    beta_green  = results_list[[pix]][3]
+  )
+}))
+
+# Plot 1 - Intercept
+ggplot(results_df, aes(x = eps, y = intercept)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[1], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "Intercept (α) across pixel sizes - Rule R", x = "Pixel size (km)", y = "α")
+
+# Plot 2 - Beta dfault
+ggplot(results_df, aes(x = eps, y = beta_dfault)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[2], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "β (distance to fault) across pixel sizes - Rule R", x = "Pixel size (km)", y = "β")
+
+# Plot 3 - Greenstone
+ggplot(results_df, aes(x = eps, y = beta_green)) +
+  geom_line() + geom_point(size = 0.5) +
+  geom_smooth(method = "loess", col = "blue", se = FALSE) +
+  geom_hline(yintercept = coef(fit_ppm)[3], linetype = "dashed", col = "red") +
+  scale_x_reverse() +
+  labs(title = "γ (greenstone) across pixel sizes - Rule R", x = "Pixel size (km)", y = "γ")
+
+
+```
+
+
